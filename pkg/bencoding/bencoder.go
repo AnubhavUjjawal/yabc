@@ -15,7 +15,7 @@ const (
 )
 
 type Bencoder interface {
-	Decode(data string) (interface{}, error)
+	Decode(data string) (interface{}, int, error)
 }
 
 type BencoderImpl struct {
@@ -34,39 +34,82 @@ func (b *BencoderImpl) isDataInt(data string) bool {
 }
 
 func (b *BencoderImpl) isDataDict(data string) bool {
+	// fmt.Println(data, data[0] == 'd' && data[1] != ':')
 	return data[0] == 'd' && data[1] != ':'
 }
 
-func (b *BencoderImpl) determineType(data string) (DataType, error) {
-	if b.isDataInt(data) {
-		return INT, nil
-	} else if b.isDataString(data) {
-		return STRING, nil
-	} else if b.isDataList(data) {
-		return LIST, nil
-	} else if b.isDataDict(data) {
-		return DICT, nil
-	}
-	return "", errors.New("invalid data format")
-}
+// func (b *BencoderImpl) determineType(data string) (DataType, error) {
+// 	if b.isDataInt(data) {
+// 		return INT, nil
+// 	} else if b.isDataString(data) {
+// 		return STRING, nil
+// 	} else if b.isDataList(data) {
+// 		return LIST, nil
+// 	} else if b.isDataDict(data) {
+// 		return DICT, nil
+// 	}
+// 	return "", errors.New("invalid data format")
+// }
 
-func (b *BencoderImpl) decodeString(data string) (string, error) {
+func (b *BencoderImpl) decodeString(data string) (string, int, error) {
 	if !b.isDataString(data) {
-		return "", errors.New("invalid string format")
+		return "", 0, errors.New("invalid string format")
 	}
-	return data[2:], nil
+	idx := 0
+	length := 0
+	for data[idx] != ':' {
+		length = length*10 + int(data[idx]-'0')
+		idx++
+	}
+	return data[idx+1 : idx+1+length], idx + 1 + length, nil
 }
 
-func (b *BencoderImpl) decodeInt(data string) (int, error) {
+func (b *BencoderImpl) decodeInt(data string) (int, int, error) {
 	if !b.isDataInt(data) {
-		return 0, errors.New("invalid int format")
+		return 0, 0, errors.New("invalid int format")
 	}
-	return strconv.Atoi(data[1 : len(data)-1])
+	intEnd := 0
+	for data[intEnd] != 'e' {
+		intEnd++
+	}
+
+	val, err := strconv.Atoi(data[1:intEnd])
+	return val, intEnd + 1, err
 }
 
-func (b *BencoderImpl) decodeList(data string) ([]interface{}, error) {
+func (b *BencoderImpl) decodeDict(data string) (interface{}, int, error) {
+	if !b.isDataDict(data) {
+		return nil, 0, errors.New("invalid dict format")
+	}
+	dict := make(map[string]interface{})
+	// the key is always a string
+	// the value can be a string, int, list or dict
+	slow := 1
+	for slow < len(data)-2 && data[slow] != 'e' {
+		key, pointer, err := b.Decode(data[slow:])
+		if err != nil {
+			return nil, 0, err
+		}
+		// decode the value
+		slow += pointer
+
+		valString := data[slow:]
+		val, pointer, err := b.Decode(valString)
+		dict[key.(string)] = val
+
+		if err != nil {
+			return nil, 0, err
+		}
+
+		slow += pointer
+	}
+
+	return dict, slow + 1, nil
+}
+
+func (b *BencoderImpl) decodeList(data string) ([]interface{}, int, error) {
 	if !b.isDataList(data) {
-		return nil, errors.New("invalid list format")
+		return nil, 0, errors.New("invalid list format")
 	}
 	listItems := make([]interface{}, 0)
 	// check the type of the elements in the list as we go.
@@ -75,55 +118,29 @@ func (b *BencoderImpl) decodeList(data string) ([]interface{}, error) {
 
 	// we use the two pointer approach to decode the list.
 	slow := 1
-	fast := 1
-	// fmt.Println("hehehhehe")
-	for slow < len(data)-2 && fast < len(data)-2 {
-		dataType, err := b.determineType(data[slow:])
+	for slow < len(data)-2 && data[slow] != 'e' {
+		value, pointer, err := b.Decode(data[slow:])
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
-		if dataType == STRING {
-			// move fast pointer to the end of the string
-			length := 0
-			for data[fast] != ':' {
-				length = length*10 + int(data[fast]-'0')
-				fast++
-			}
-			fast = slow + 1 + length
-			decodedString, err := b.decodeString(data[slow : fast+1])
-			if err != nil {
-				return nil, err
-			}
-			listItems = append(listItems, decodedString)
-			slow = fast + 1
-			fast = slow
-		} else if dataType == INT {
-			// move fast pointer to the end of the int
-			for data[fast] != 'e' {
-				fast++
-			}
-			decodedInt, err := b.decodeInt(data[slow : fast+1])
-			if err != nil {
-				return nil, err
-			}
-			listItems = append(listItems, decodedInt)
-			slow = fast + 1
-			fast = slow
-		}
+		listItems = append(listItems, value)
+		slow += pointer
 	}
 
-	return listItems, nil
+	return listItems, slow + 1, nil
 }
 
-func (b *BencoderImpl) Decode(data string) (interface{}, error) {
+func (b *BencoderImpl) Decode(data string) (interface{}, int, error) {
 	if b.isDataInt(data) {
 		return b.decodeInt(data)
 	} else if b.isDataString(data) {
 		return b.decodeString(data)
 	} else if b.isDataList(data) {
 		return b.decodeList(data)
+	} else if b.isDataDict(data) {
+		return b.decodeDict(data)
 	}
-	return nil, nil
+	return nil, 0, nil
 }
 
 func NewBencoder() Bencoder {
