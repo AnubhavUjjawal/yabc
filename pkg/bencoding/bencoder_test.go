@@ -100,9 +100,6 @@ func TestBencoderDictDecodeIsWorking(t *testing.T) {
 func TestNestedDict(t *testing.T) {
 	a := bencoding.NewBencoder()
 	tests := [][]interface{}{
-		// {"d3:cow3:moo4:spam4:eggse", map[string]interface{}{"cow": "moo", "spam": "eggs"}},
-		// {"d3:cow3:moo4:spami34ee", map[string]interface{}{"cow": "moo", "spam": 34}},
-		// {"d4:spaml1:a1:bee", map[string]interface{}{"spam": []interface{}{"a", "b"}}},
 		{
 			"d3:cowd5:sound3:mooee",
 			map[string]interface{}{
@@ -161,4 +158,36 @@ func TestDecodeIsWorkingOnSampleFiles(t *testing.T) {
 			// t.Log(decoded)
 		})
 	}
+}
+
+func TestUnmarshal(t *testing.T) {
+	a := bencoding.NewBencoder()
+	type DataStruct struct {
+		Files []struct {
+			Path []string `bencode:"path"`
+		} `bencode:"files"`
+	}
+	str := "d5:filesld4:pathl6:path-1eed4:pathl6:path-2eeee"
+	t.Run("Testing unmarshal", func(t *testing.T) {
+		var data DataStruct
+		err := a.Unmarshal(str, &data)
+		if err != nil {
+			t.Errorf("Error unmarshaling: %v", err)
+		}
+		result := DataStruct{
+			Files: []struct {
+				Path []string `bencode:"path"`
+			}{
+				{
+					Path: []string{"path-1"},
+				},
+				{
+					Path: []string{"path-2"},
+				},
+			},
+		}
+		if !reflect.DeepEqual(data, result) {
+			t.Errorf("Expected: %v, got: %v", result, data)
+		}
+	})
 }

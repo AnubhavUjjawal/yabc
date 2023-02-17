@@ -3,6 +3,8 @@ package bencoding
 import (
 	"errors"
 	"strconv"
+
+	"github.com/mitchellh/mapstructure"
 )
 
 type DataType string
@@ -15,7 +17,9 @@ const (
 )
 
 type Bencoder interface {
+	// Decode returns the decoded data, current position of the cursor in the `data string`` and an error, if any.
 	Decode(data string) (interface{}, int, error)
+	Unmarshal(data string, dt interface{}) error
 }
 
 type BencoderImpl struct {
@@ -141,6 +145,22 @@ func (b *BencoderImpl) Decode(data string) (interface{}, int, error) {
 		return b.decodeDict(data)
 	}
 	return nil, 0, nil
+}
+
+func (b *BencoderImpl) Unmarshal(data string, dt interface{}) error {
+	decoded, _, err := b.Decode(data)
+	if err != nil {
+		return err
+	}
+	// dt = decoded
+	cfg := &mapstructure.DecoderConfig{
+		Metadata: nil,
+		Result:   dt,
+		TagName:  "bencode",
+	}
+	decoder, _ := mapstructure.NewDecoder(cfg)
+	err = decoder.Decode(decoded)
+	return err
 }
 
 func NewBencoder() Bencoder {
