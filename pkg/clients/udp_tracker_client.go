@@ -78,6 +78,7 @@ func (c *UDPTrackerClient) setConnectionID(response []byte) {
 	c.connectionID = int64(binary.BigEndian.Uint64(response[8:16]))
 }
 
+// TODO: refactor this method
 func (c *UDPTrackerClient) sendConnectRequest(readTimeout time.Duration) ([]byte, error) {
 	request := c.buildConnectRequestPacket()
 	conn, err := c.getConnection()

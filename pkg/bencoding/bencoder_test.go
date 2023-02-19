@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/AnubhavUjjawal/yabc/pkg/bencoding"
+	"github.com/AnubhavUjjawal/yabc/pkg/meta"
 )
 
 func TestBencoderStringDecodeIsWorking(t *testing.T) {
@@ -156,6 +157,12 @@ func TestDecodeIsWorkingOnSampleFiles(t *testing.T) {
 				t.Errorf("Error decoding: %v", err)
 			}
 			// t.Log(decoded)
+			var data meta.MetaInfo
+			err = a.Unmarshal(string(content), &data)
+			if err != nil {
+				t.Errorf("Error unmarshaling: %v", err)
+			}
+			// t.Log(data.Info.GetPiecesHashes())
 		})
 	}
 }
