@@ -94,7 +94,6 @@ func (b *BencoderImpl) decodeDict(data string) (interface{}, int, error) {
 		if err != nil {
 			return nil, 0, err
 		}
-		// decode the value
 		slow += pointer
 
 		valString := data[slow:]
