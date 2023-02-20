@@ -9,6 +9,7 @@ type FileData struct {
 	Path   []string `json:"path" bencode:"path"`
 }
 
+// TODO: Add support for single file torrents
 type InfoDict struct {
 	Files       []FileData `json:"files" bencode:"files"`
 	Name        string     `json:"name" bencode:"name"`
@@ -41,4 +42,8 @@ type MetaInfo struct {
 	CreatedBy    string     `json:"created by" bencode:"created by"`
 	CreationDate int        `json:"creation date" bencode:"creation date"`
 	Info         InfoDict   `json:"info" bencode:"info"`
+
+	// RawData is the raw string of the torrent file.
+	// We need it to calculate the infohash of the torrent.
+	RawData string `json:"raw_data" bencode:"raw_data"`
 }

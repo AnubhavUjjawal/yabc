@@ -2,6 +2,7 @@ package bencoding
 
 import (
 	"errors"
+	"reflect"
 	"strconv"
 
 	"github.com/mitchellh/mapstructure"
@@ -20,6 +21,9 @@ type Bencoder interface {
 	// Decode returns the decoded data, current position of the cursor in the `data string`` and an error, if any.
 	Decode(data string) (interface{}, int, error)
 	Unmarshal(data string, dt interface{}) error
+
+	// NOTE: this method does not belong here. Refactor this.
+	GetRawValueFromDict(data string, key string) (string, error)
 }
 
 type BencoderImpl struct {
@@ -151,6 +155,10 @@ func (b *BencoderImpl) Unmarshal(data string, dt interface{}) error {
 	if err != nil {
 		return err
 	}
+	if reflect.ValueOf(decoded).Kind() == reflect.Map {
+		// decoded = map[string]interface{}(decoded.(map[string]interface{}))
+		decoded.(map[string]interface{})["raw_data"] = data
+	}
 	// dt = decoded
 	cfg := &mapstructure.DecoderConfig{
 		Metadata: nil,
@@ -160,6 +168,40 @@ func (b *BencoderImpl) Unmarshal(data string, dt interface{}) error {
 	decoder, _ := mapstructure.NewDecoder(cfg)
 	err = decoder.Decode(decoded)
 	return err
+}
+
+func (b *BencoderImpl) GetRawValueFromDict(data string, key string) (string, error) {
+	if !b.isDataDict(data) {
+		return "", errors.New("invalid dict format")
+	}
+	// seek through the dict till we find the key
+	slow := 1
+	for slow < len(data)-2 && data[slow] != 'e' {
+		// decode the key
+		keyString, pointer, err := b.Decode(data[slow:])
+		if err != nil {
+			return "", err
+		}
+		slow += pointer
+		if keyString.(string) == key {
+			// we found the key, we need to return the raw value
+			valString := data[slow:]
+			_, pointer, err := b.Decode(valString)
+			if err != nil {
+				return "", err
+			}
+			return valString[:pointer], nil
+		}
+		// we did not find the key
+		// skip the value
+		valString := data[slow:]
+		_, pointer, err = b.Decode(valString)
+		if err != nil {
+			return "", err
+		}
+		slow += pointer
+	}
+	return "", errors.New("key not found")
 }
 
 func NewBencoder() Bencoder {

@@ -162,7 +162,21 @@ func TestDecodeIsWorkingOnSampleFiles(t *testing.T) {
 			if err != nil {
 				t.Errorf("Error unmarshaling: %v", err)
 			}
-			// t.Log(data.Info.GetPiecesHashes())
+			// t.Log(a.GetRawValueFromDict(data.RawData, "info"))
+
+			// Let's check if we get the correct info dict
+			dataInfoStr, err := a.GetRawValueFromDict(data.RawData, "info")
+			if err != nil {
+				t.Errorf("Error getting info dict: %v", err)
+			}
+			var dataInfo meta.InfoDict
+			err = a.Unmarshal(dataInfoStr, &dataInfo)
+			if err != nil {
+				t.Errorf("Error unmarshaling info dict: %v", err)
+			}
+			if !reflect.DeepEqual(data.Info, dataInfo) {
+				t.Errorf("Expected: %v, got: %v", data.Info, dataInfo)
+			}
 		})
 	}
 }
