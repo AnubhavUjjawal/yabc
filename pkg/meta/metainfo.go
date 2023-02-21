@@ -13,6 +13,7 @@ type FileData struct {
 type InfoDict struct {
 	Files       []FileData `json:"files" bencode:"files"`
 	Name        string     `json:"name" bencode:"name"`
+	Length      int        `json:"length" bencode:"length"`
 	PieceLength int        `json:"piece length" bencode:"piece length"`
 	Pieces      string     `json:"pieces" bencode:"pieces"`
 }

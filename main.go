@@ -3,19 +3,20 @@ package main
 
 import (
 	"crypto/sha1"
-	"fmt"
-	"log"
 	"math/rand"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/AnubhavUjjawal/yabc/pkg/bencoding"
 	"github.com/AnubhavUjjawal/yabc/pkg/clients"
 	"github.com/AnubhavUjjawal/yabc/pkg/meta"
+	log "github.com/sirupsen/logrus"
 )
 
 func main() {
-	torrentFile := "sample_torrents/sample1.torrent"
+	// torrentFile := "sample_torrents/big-buck-bunny.torrent"
+	torrentFile := "sample_torrents/cosmos-laundromat.torrent"
 	// read torrent file into string
 	dataBytes, err := os.ReadFile(torrentFile)
 	if err != nil {
@@ -42,7 +43,7 @@ func main() {
 	r := rand.New(source)
 	r.Read(token)
 
-	fmt.Println(token)
+	log.Info(token)
 	announceData := clients.AnnounceData{
 		InfoHash:   string(infoHash),
 		PeerId:     string(token),
@@ -51,14 +52,38 @@ func main() {
 		Left:       0,
 	}
 
-	client, err := clients.NewTrackerClient("udp://tracker.opentrackr.org:1337/announce")
+	// client, err := clients.NewTrackerClient(data.Announce)
 	// client, err := clients.NewTrackerClient("udp://tracker.torrent.eu.org:451")
 	// client, err := clients.NewTrackerClient("udp://tracker.openbittorrent.com:80")
+	client, err := clients.NewTrackerClient("udp://tracker.opentrackr.org:1337/announce")
 	if err != nil {
 		log.Fatal(err)
 	}
-	err = client.Announce(announceData)
+
+	// NOTE: use announceList if available
+	announceResponse, err := client.Announce(announceData)
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// run a goroutine which sends an announce request after announceResponse.Interval seconds
+	// updates the announceResponse.Interval and repeats.
+	// log.Info("announce response: ", announceResponse)
+
+	if announceResponse.Peers == nil {
+		log.Info("no peers found")
+	} else {
+		log.Info("peers found: ", announceResponse.Peers)
+	}
+	var wg sync.WaitGroup
+	for _, peer := range announceResponse.Peers {
+		peerClient := clients.NewPeerClient(peer)
+		wg.Add(1)
+		go peerClient.HandShake(&wg, string(infoHash), string(token))
+		// if err != nil {
+		// 	log.WithError(err).Error("failed to handshake with peer")
+		// }
+		// start a goroutine with each client
+	}
+	wg.Wait()
 }

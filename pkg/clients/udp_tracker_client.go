@@ -218,7 +218,7 @@ func (c *UDPTrackerClient) announceResponsePacketToStruct(response []byte, numPe
 
 }
 
-func (c *UDPTrackerClient) Announce(announceData AnnounceData) error {
+func (c *UDPTrackerClient) Announce(announceData AnnounceData) (AnnounceResponse, error) {
 	log.Info("announcing to UDP tracker: ", c.host)
 	if c.connectionID == MAGIC_NUMBER {
 		c.connect()
@@ -237,20 +237,20 @@ func (c *UDPTrackerClient) Announce(announceData AnnounceData) error {
 
 		conn, err := c.getConnection()
 		if err != nil {
-			log.Warn("failed to get connection: ", err)
+			log.WithError(err).Warn("failed to get UDP connection")
 			continue
 		}
 		defer conn.Close()
-		log.Info("announce request: ", request)
+		log.Debug("announce request: ", request)
 		_, err = conn.Write(request)
 		if err != nil {
-			log.Warn("failed to write to UDP tracker: ", err)
+			log.WithError(err).Warn("failed to write to UDP tracker")
 			continue
 		}
 
 		err = conn.SetReadDeadline(time.Now().Add(readTimeout))
 		if err != nil {
-			log.Warn("failed to set read deadline: ", err)
+			log.WithError(err).Warn("failed to set read deadline")
 			continue
 		}
 
@@ -259,25 +259,28 @@ func (c *UDPTrackerClient) Announce(announceData AnnounceData) error {
 
 		numBytesInRes, _, err := conn.ReadFromUDP(response)
 		if err != nil {
-			log.Warn("failed to read from UDP tracker: ", err)
+			log.WithError(err).Warn("failed to read from UDP tracker")
 			continue
 		} else if numBytesInRes < 20 {
-			log.Warn("received less than 20 bytes: ", numBytesInRes)
+			log.WithError(err).Warn("announce response is too short")
 		} else {
 			// log.Info("announce response: ", response)
 			err := c.verifyAnnounceResponsePacket(request, response)
 			if err != nil {
-				log.Warn("failed to verify announce response packet: ", err)
+				log.WithError(err).Warn("announce response verification failed")
 				continue
 			}
 			numPeers := (numBytesInRes - 20) / 6
 			responseData := c.announceResponsePacketToStruct(response, numPeers)
-			log.Info("announce response data: ", responseData)
-			return nil
+			log.Debug("announce response data: ", responseData)
+			return AnnounceResponse{
+				Interval: responseData.Interval,
+				Peers:    responseData.Peers,
+			}, nil
 		}
 	}
 
-	return nil
+	return AnnounceResponse{}, errors.New("failed to announce to UDP tracker")
 }
 
 func NewUDPTrackerClient(host string) TrackerClient {

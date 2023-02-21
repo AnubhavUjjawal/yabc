@@ -20,8 +20,14 @@ type PeerInfo struct {
 	Port uint16
 }
 
+type AnnounceResponse struct {
+	// Interval in seconds that the client should wait between sending regular requests to the tracker
+	Interval int32
+	Peers    []PeerInfo
+}
+
 type TrackerClient interface {
-	Announce(AnnounceData) error
+	Announce(AnnounceData) (AnnounceResponse, error)
 }
 
 func NewTrackerClient(rawUrl string) (TrackerClient, error) {
