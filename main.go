@@ -2,7 +2,9 @@
 package main
 
 import (
+	"context"
 	"crypto/sha1"
+	"math"
 	"math/rand"
 	"os"
 	"sync"
@@ -15,21 +17,22 @@ import (
 )
 
 func main() {
+	torrentFile := "sample_torrents/sample1.torrent"
 	// torrentFile := "sample_torrents/big-buck-bunny.torrent"
-	torrentFile := "sample_torrents/cosmos-laundromat.torrent"
+	// torrentFile := "sample_torrents/cosmos-laundromat.torrent"
 	// read torrent file into string
 	dataBytes, err := os.ReadFile(torrentFile)
 	if err != nil {
 		log.Fatal(err)
 	}
 	// parse torrent file
-	var data meta.MetaInfo
+	var torrentMeta meta.MetaInfo
 	decoder := bencoding.NewBencoder()
-	err = decoder.Unmarshal(string(dataBytes), &data)
+	err = decoder.Unmarshal(string(dataBytes), &torrentMeta)
 	if err != nil {
 		log.Fatal(err)
 	}
-	infoStr, err := decoder.GetRawValueFromDict(data.RawData, "info")
+	infoStr, err := decoder.GetRawValueFromDict(torrentMeta.RawData, "info")
 	hasher := sha1.New()
 	hasher.Write([]byte(infoStr))
 	if err != nil {
@@ -76,14 +79,61 @@ func main() {
 		log.Info("peers found: ", announceResponse.Peers)
 	}
 	var wg sync.WaitGroup
+	ctx := context.Background()
+	blockRequestChan := make(chan meta.BlockRequest)
+	pieceChan := make(chan meta.BlockResponse)
 	for _, peer := range announceResponse.Peers {
-		peerClient := clients.NewPeerClient(peer)
+		// log.Info("creating peer: ", peer)
+		peerClient := clients.NewPeerClient(peer, torrentMeta)
 		wg.Add(1)
-		go peerClient.HandShake(&wg, string(infoHash), string(token))
+		// context, cancel := context.WithTimeout(ctx, 5*time.Second)
+		// defer cancel()
+		go peerClient.Start(
+			ctx,
+			&wg,
+			string(infoHash),
+			string(token),
+			blockRequestChan,
+			pieceChan,
+		)
 		// if err != nil {
 		// 	log.WithError(err).Error("failed to handshake with peer")
 		// }
 		// start a goroutine with each client
 	}
+	time.Sleep(5 * time.Second)
+
+	// lets make a test file.
+	// defer file.Close()
+	// Lets try to download the 1st piece
+	blockSize := int(math.Pow(2, 14))
+	// for i := 0; i < torrentMeta.Info.PieceLength; i += blockSize {
+	// 	lengthToDownload := blockSize
+	// 	if i+blockSize > torrentMeta.Info.PieceLength {
+	// 		lengthToDownload = torrentMeta.Info.PieceLength - i
+	// 	}
+	// 	blockRequestChan <- meta.BlockRequest{
+	// 		Index:  0,
+	// 		Begin:  i,
+	// 		Length: lengthToDownload,
+	// 	}
+	// }
+	go func() {
+		for {
+			blockRequestChan <- meta.BlockRequest{
+				Index:  0,
+				Begin:  0,
+				Length: blockSize,
+			}
+			time.Sleep(2 * time.Second)
+		}
+	}()
+	go func() {
+		for blockRes := range pieceChan {
+			log.Info("got piece: ", blockRes)
+		}
+	}()
+	log.Info("closing blockRequestChan")
+	// close(blockRequestChan)
 	wg.Wait()
 }

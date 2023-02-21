@@ -18,6 +18,17 @@ type InfoDict struct {
 	Pieces      string     `json:"pieces" bencode:"pieces"`
 }
 
+type BlockRequest struct {
+	Index  int
+	Begin  int
+	Length int
+}
+
+type BlockResponse struct {
+	BlockRequest
+	Data []byte
+}
+
 // Pieces is a string of 20 byte SHA1 hashes concatenated together.
 // We read each byte and convert it to it's hex representation, along with padding if needed.
 // This is the actual SHA1 hash concatenated together.
