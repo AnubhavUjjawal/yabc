@@ -98,7 +98,7 @@ func (c *UDPTrackerClient) verifyConnectResponsePacket(request []byte, response 
 	return nil
 }
 
-func (c *UDPTrackerClient) setConnectionIdFromResponse(response []byte) {
+func (c *UDPTrackerClient) setConnectionIdFromConnectResponsePacket(response []byte) {
 	c.connectionID = int64(binary.BigEndian.Uint64(response[8:16]))
 }
 
@@ -138,6 +138,10 @@ func (c *UDPTrackerClient) connect(ctx context.Context) error {
 	numRetry := 0
 
 	for numRetry <= RETRIES_MAX {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		timeout := time.Duration(math.Pow(2, float64(numRetry))) * TIMEOUT
 		log.Debug("try and timeout: ", numRetry, timeout)
 
@@ -151,7 +155,7 @@ func (c *UDPTrackerClient) connect(ctx context.Context) error {
 			log.WithError(err).Warn("failed to connect to UDP tracker, retrying")
 			continue
 		}
-		c.setConnectionIdFromResponse(response)
+		c.setConnectionIdFromConnectResponsePacket(response)
 		log.Info("connected to UDP tracker: ", c.host, " new connection id: ", c.connectionID)
 		return nil
 	}
@@ -282,6 +286,9 @@ func (c *UDPTrackerClient) Announce(ctx context.Context, announceData AnnounceDa
 	numRetry := 0
 
 	for numRetry <= RETRIES_MAX {
+		if ctx.Err() != nil {
+			return AnnounceResponse{}, ctx.Err()
+		}
 		timeout := time.Duration(math.Pow(2, float64(numRetry))) * TIMEOUT
 		log.Debug("try and timeout: ", numRetry, timeout)
 
@@ -296,11 +303,13 @@ func (c *UDPTrackerClient) Announce(ctx context.Context, announceData AnnounceDa
 			continue
 		}
 		announceResponse := c.announceResponsePacketToStruct(response)
+		log.Info("announce response: ", announceResponse)
 		return AnnounceResponse{
 			Interval: announceResponse.Interval,
 			Peers:    announceResponse.Peers,
 		}, nil
 	}
+	log.Info("failed to announce to UDP tracker: ", c.host)
 	return AnnounceResponse{}, errors.New("failed to announce to UDP tracker")
 }
 
