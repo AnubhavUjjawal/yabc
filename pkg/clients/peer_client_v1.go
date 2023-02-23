@@ -28,7 +28,7 @@ const (
 )
 
 type PeerClientV1 struct {
-	peerInfo    PeerInfo
+	peerInfo    PeersInfo
 	conn        *net.Conn
 	torrentInfo *meta.MetaInfo
 
@@ -274,7 +274,7 @@ func (c *PeerClientV1) Start(ctx context.Context, wg *sync.WaitGroup, infoHash s
 	// After handshake
 }
 
-func NewPeerClientV1(peerInfo PeerInfo, torrentInfo meta.MetaInfo) *PeerClientV1 {
+func NewPeerClientV1(peerInfo PeersInfo, torrentInfo meta.MetaInfo) *PeerClientV1 {
 	return &PeerClientV1{
 		peerInfo:       peerInfo,
 		torrentInfo:    &torrentInfo,

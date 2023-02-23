@@ -1,6 +1,7 @@
 package clients
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/url"
@@ -15,7 +16,7 @@ type AnnounceData struct {
 	// NumWant    int32
 }
 
-type PeerInfo struct {
+type PeersInfo struct {
 	Ip   net.IP
 	Port uint16
 }
@@ -23,11 +24,11 @@ type PeerInfo struct {
 type AnnounceResponse struct {
 	// Interval in seconds that the client should wait between sending regular requests to the tracker
 	Interval int32
-	Peers    []PeerInfo
+	Peers    []PeersInfo
 }
 
 type TrackerClient interface {
-	Announce(AnnounceData) (AnnounceResponse, error)
+	Announce(context.Context, AnnounceData) (AnnounceResponse, error)
 }
 
 func NewTrackerClient(rawUrl string) (TrackerClient, error) {

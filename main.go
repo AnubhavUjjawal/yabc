@@ -4,10 +4,8 @@ package main
 import (
 	"context"
 	"crypto/sha1"
-	"math"
 	"math/rand"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/AnubhavUjjawal/yabc/pkg/bencoding"
@@ -17,8 +15,9 @@ import (
 )
 
 func main() {
-	torrentFile := "sample_torrents/sample1.torrent"
-	// torrentFile := "sample_torrents/big-buck-bunny.torrent"
+	log.SetLevel(log.DebugLevel)
+	// torrentFile := "sample_torrents/sample1.torrent"
+	torrentFile := "sample_torrents/big-buck-bunny.torrent"
 	// torrentFile := "sample_torrents/cosmos-laundromat.torrent"
 	// read torrent file into string
 	dataBytes, err := os.ReadFile(torrentFile)
@@ -57,14 +56,14 @@ func main() {
 
 	// client, err := clients.NewTrackerClient(data.Announce)
 	// client, err := clients.NewTrackerClient("udp://tracker.torrent.eu.org:451")
-	// client, err := clients.NewTrackerClient("udp://tracker.openbittorrent.com:80")
-	client, err := clients.NewTrackerClient("udp://tracker.opentrackr.org:1337/announce")
+	client, err := clients.NewTrackerClient("udp://tracker.openbittorrent.com:80")
+	// client, err := clients.NewTrackerClient("udp://tracker.opentrackr.org:1337/announce")
 	if err != nil {
 		log.Fatal(err)
 	}
-
+	ctx := context.Background()
 	// NOTE: use announceList if available
-	announceResponse, err := client.Announce(announceData)
+	announceResponse, err := client.Announce(ctx, announceData)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -78,62 +77,61 @@ func main() {
 	} else {
 		log.Info("peers found: ", announceResponse.Peers)
 	}
-	var wg sync.WaitGroup
-	ctx := context.Background()
-	blockRequestChan := make(chan meta.BlockRequest)
-	pieceChan := make(chan meta.BlockResponse)
-	for _, peer := range announceResponse.Peers {
-		// log.Info("creating peer: ", peer)
-		peerClient := clients.NewPeerClient(peer, torrentMeta)
-		wg.Add(1)
-		// context, cancel := context.WithTimeout(ctx, 5*time.Second)
-		// defer cancel()
-		go peerClient.Start(
-			ctx,
-			&wg,
-			string(infoHash),
-			string(token),
-			blockRequestChan,
-			pieceChan,
-		)
-		// if err != nil {
-		// 	log.WithError(err).Error("failed to handshake with peer")
-		// }
-		// start a goroutine with each client
-	}
-	time.Sleep(5 * time.Second)
-
-	// lets make a test file.
-	// defer file.Close()
-	// Lets try to download the 1st piece
-	blockSize := int(math.Pow(2, 14))
-	// for i := 0; i < torrentMeta.Info.PieceLength; i += blockSize {
-	// 	lengthToDownload := blockSize
-	// 	if i+blockSize > torrentMeta.Info.PieceLength {
-	// 		lengthToDownload = torrentMeta.Info.PieceLength - i
-	// 	}
-	// 	blockRequestChan <- meta.BlockRequest{
-	// 		Index:  0,
-	// 		Begin:  i,
-	// 		Length: lengthToDownload,
-	// 	}
+	// var wg sync.WaitGroup
+	// blockRequestChan := make(chan meta.BlockRequest)
+	// pieceChan := make(chan meta.BlockResponse)
+	// for _, peer := range announceResponse.Peers {
+	// 	// log.Info("creating peer: ", peer)
+	// 	peerClient := clients.NewPeerClient(peer, torrentMeta)
+	// 	wg.Add(1)
+	// 	// context, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// 	// defer cancel()
+	// 	go peerClient.Start(
+	// 		ctx,
+	// 		&wg,
+	// 		string(infoHash),
+	// 		string(token),
+	// 		blockRequestChan,
+	// 		pieceChan,
+	// 	)
+	// 	// if err != nil {
+	// 	// 	log.WithError(err).Error("failed to handshake with peer")
+	// 	// }
+	// 	// start a goroutine with each client
 	// }
-	go func() {
-		for {
-			blockRequestChan <- meta.BlockRequest{
-				Index:  0,
-				Begin:  0,
-				Length: blockSize,
-			}
-			time.Sleep(2 * time.Second)
-		}
-	}()
-	go func() {
-		for blockRes := range pieceChan {
-			log.Info("got piece: ", blockRes)
-		}
-	}()
-	log.Info("closing blockRequestChan")
-	// close(blockRequestChan)
-	wg.Wait()
+	// time.Sleep(5 * time.Second)
+
+	// // lets make a test file.
+	// // defer file.Close()
+	// // Lets try to download the 1st piece
+	// blockSize := int(math.Pow(2, 14))
+	// // for i := 0; i < torrentMeta.Info.PieceLength; i += blockSize {
+	// // 	lengthToDownload := blockSize
+	// // 	if i+blockSize > torrentMeta.Info.PieceLength {
+	// // 		lengthToDownload = torrentMeta.Info.PieceLength - i
+	// // 	}
+	// // 	blockRequestChan <- meta.BlockRequest{
+	// // 		Index:  0,
+	// // 		Begin:  i,
+	// // 		Length: lengthToDownload,
+	// // 	}
+	// // }
+	// go func() {
+	// 	for {
+	// 		blockRequestChan <- meta.BlockRequest{
+	// 			Index:  0,
+	// 			Begin:  0,
+	// 			Length: blockSize,
+	// 		}
+	// 		time.Sleep(2 * time.Second)
+	// 	}
+	// }()
+	// go func() {
+	// 	for blockRes := range pieceChan {
+	// 		log.Info("got piece: ", blockRes)
+	// 	}
+	// }()
+	// log.Info("closing blockRequestChan")
+	// // close(blockRequestChan)
+	// wg.Wait()
 }

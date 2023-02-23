@@ -1,8 +1,11 @@
 package clients
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"io"
 	"math"
 	"math/rand"
 	"net"
@@ -12,12 +15,22 @@ import (
 )
 
 const (
-	MAGIC_NUMBER    int64 = 0x41727101980
-	ACTION_CONNECT  int32 = 0
+	MAGIC_NUMBER     int64 = 0x41727101980
+	ACTION_CONNECT   int32 = 0
+	DEFAULT_NUM_WANT int32 = -1
+
 	ACTION_ANNOUNCE       = 1
 	ACTION_SCRAPE         = 2
 	ACTION_ERROR          = 3
 	RETRIES_MAX           = 8
+	TIMEOUT               = 15 * time.Second
+	CONNECT_REQUEST_SIZE  = 16
+	CONNECT_RESPONSE_SIZE = 16
+	ANNOUNCE_REQUEST_SIZE = 98
+
+	// This is the size of the announce response without the peers list
+	ANNOUNCE_RESPONSE_STATIC_SIZE = 20
+	PEER_IPV4_PORT_PAIR_SIZE      = 6
 )
 
 // https://xbtt.sourceforge.net/udp_tracker_protocol.html
@@ -25,6 +38,8 @@ const (
 type UDPTrackerClient struct {
 	host         string
 	connectionID int64
+
+	rand *rand.Rand
 	// action       int32
 	// transactionID int32
 }
@@ -37,10 +52,10 @@ type UDPTrackerAnnounceResponse struct {
 	Seeders       int32
 
 	// TODO: add peers list
-	Peers []PeerInfo
+	Peers []PeersInfo
 }
 
-func (c *UDPTrackerClient) getConnection() (*net.UDPConn, error) {
+func (c *UDPTrackerClient) getConnection(ctx context.Context) (*net.UDPConn, error) {
 	url := c.host
 	server, err := net.ResolveUDPAddr("udp", url)
 	if err != nil {
@@ -57,11 +72,15 @@ func (c *UDPTrackerClient) buildConnectRequestPacket() []byte {
 	transactionID := c.getNewTransactionID()
 	action := ACTION_CONNECT
 
-	data := make([]byte, 16)
+	data := make([]byte, CONNECT_REQUEST_SIZE)
 	binary.BigEndian.PutUint64(data, uint64(c.connectionID))
 	binary.BigEndian.PutUint32(data[8:], uint32(action))
 	binary.BigEndian.PutUint32(data[12:], uint32(transactionID))
-	log.Info("initial connect data ", c.connectionID, action, transactionID)
+	return data
+}
+
+func (c *UDPTrackerClient) buildConnectResponsePacket() []byte {
+	data := make([]byte, CONNECT_RESPONSE_SIZE)
 	return data
 }
 
@@ -70,94 +89,82 @@ func (c *UDPTrackerClient) verifyConnectResponsePacket(request []byte, response 
 	transactionIdInReq := binary.BigEndian.Uint32(request[12:16])
 
 	if transactionIdInRes != transactionIdInReq {
-		log.Warn("transaction ID mismatch ", transactionIdInReq, " ", transactionIdInRes)
-		return errors.New("transaction ID mismatch")
+		return errors.New("transaction id mismatch in connect response packet")
 	}
 	actionInRes := binary.BigEndian.Uint32(response[0:4])
 	if actionInRes != uint32(ACTION_CONNECT) {
-		log.Warn("action mismatch, retrying ", actionInRes, " ", ACTION_CONNECT)
-		return errors.New("action mismatch")
+		return fmt.Errorf("action mismatch, got: %d want: %d", actionInRes, ACTION_CONNECT)
 	}
 	return nil
 }
 
-func (c *UDPTrackerClient) setConnectionID(response []byte) {
+func (c *UDPTrackerClient) setConnectionIdFromResponse(response []byte) {
 	c.connectionID = int64(binary.BigEndian.Uint64(response[8:16]))
 }
 
-// TODO: refactor this method
-func (c *UDPTrackerClient) sendConnectRequest(readTimeout time.Duration) ([]byte, error) {
-	request := c.buildConnectRequestPacket()
-	conn, err := c.getConnection()
+func (c *UDPTrackerClient) sendConnectRequest(ctx context.Context) ([]byte, error) {
+	conn, err := c.getConnection(ctx)
 	if err != nil {
-		log.Warn("failed to get connection: ", err)
 		return nil, err
 	}
 	defer conn.Close()
 
+	deadline, ok := ctx.Deadline()
+	if ok {
+		conn.SetDeadline(deadline)
+	}
+
+	request := c.buildConnectRequestPacket()
 	_, err = conn.Write(request)
 	if err != nil {
-		log.Warn("failed to write to UDP tracker: ", err)
 		return nil, err
 	}
 
-	err = conn.SetReadDeadline(time.Now().Add(readTimeout))
+	response := c.buildConnectResponsePacket()
+	_, err = io.ReadFull(conn, response)
 	if err != nil {
-		log.Warn("failed to set read deadline: ", err)
 		return nil, err
 	}
 
-	response := make([]byte, 16)
-	n, _, err := conn.ReadFromUDP(response)
-	if err != nil {
-		log.Warn("failed to read from UDP tracker: ", err)
-		return nil, err
-	}
-	if n < 16 {
-		log.Warn("received less than 16 bytes: ", n)
-		return nil, errors.New("received less than 16 bytes")
-	}
 	err = c.verifyConnectResponsePacket(request, response)
 	if err != nil {
-		log.Warn("failed to verify connect response packet: ", err)
 		return nil, err
 	}
 	return response, nil
 }
 
-func (c *UDPTrackerClient) connect() error {
+func (c *UDPTrackerClient) connect(ctx context.Context) error {
 	log.Info("connecting to UDP tracker: ", c.host)
-	tryNum := 0
+	numRetry := 0
 
-	for tryNum <= RETRIES_MAX {
-		log.Info("try number: ", tryNum)
-		readTimeout := time.Duration(math.Pow(2, float64(tryNum))*15) * time.Second
-		log.Info("read timeout: ", readTimeout)
+	for numRetry <= RETRIES_MAX {
+		timeout := time.Duration(math.Pow(2, float64(numRetry))) * TIMEOUT
+		log.Debug("try and timeout: ", numRetry, timeout)
 
-		// increasing try number before we forget
-		tryNum++
+		connectContext, connectCancel := context.WithTimeout(ctx, timeout)
+		defer connectCancel()
 
-		response, err := c.sendConnectRequest(readTimeout)
+		numRetry++
+
+		response, err := c.sendConnectRequest(connectContext)
 		if err != nil {
-			log.Warn("failed to send connect request: ", err)
+			log.WithError(err).Warn("failed to connect to UDP tracker, retrying")
 			continue
 		}
-		c.setConnectionID(response)
+		c.setConnectionIdFromResponse(response)
+		log.Info("connected to UDP tracker: ", c.host, " new connection id: ", c.connectionID)
 		return nil
 	}
 	return errors.New("failed to connect to UDP tracker, max retries exceeded")
 }
 
 func (c *UDPTrackerClient) getNewTransactionID() int32 {
-	source := rand.NewSource(time.Now().UnixNano())
-	r := rand.New(source)
-	return r.Int31()
+	return c.rand.Int31()
 }
 
 func (c *UDPTrackerClient) buildAnnounceRequestPacket(announceData AnnounceData) []byte {
 	transactionId := c.getNewTransactionID()
-	log.Info("new transaction ID: ", transactionId)
-	data := make([]byte, 98)
+	data := make([]byte, ANNOUNCE_REQUEST_SIZE)
 	binary.BigEndian.PutUint64(data, uint64(c.connectionID))
 	binary.BigEndian.PutUint32(data[8:], uint32(ACTION_ANNOUNCE))
 	binary.BigEndian.PutUint32(data[12:], uint32(transactionId))
@@ -169,10 +176,21 @@ func (c *UDPTrackerClient) buildAnnounceRequestPacket(announceData AnnounceData)
 	binary.BigEndian.PutUint32(data[80:], 0)
 	binary.BigEndian.PutUint32(data[84:], 0)
 	binary.BigEndian.PutUint32(data[88:], 0)
-	numWant := -1
+	numWant := DEFAULT_NUM_WANT
 	binary.BigEndian.PutUint32(data[92:], uint32(numWant))
 	binary.BigEndian.PutUint16(data[96:], 6767)
 	return data
+}
+
+func (c *UDPTrackerClient) buildAnnounceResponsePacket() []byte {
+	// data := make([]byte, ANNOUNCE_RESPONSE_STATIC_SIZE)
+
+	// https://stackoverflow.com/a/21985400/13499618
+	// It seems like we cannot call Read on a UDP datagram twice,
+	// i.e. we cannot read the first 20 bytes and then read the rest of the bytes again.
+
+	// So for now we will just allocate a large buffer and use it for all responses.
+	return make([]byte, 1024*10)
 }
 
 func (c *UDPTrackerClient) verifyAnnounceResponsePacket(request []byte, response []byte) error {
@@ -180,27 +198,27 @@ func (c *UDPTrackerClient) verifyAnnounceResponsePacket(request []byte, response
 	transactionIdInReq := binary.BigEndian.Uint32(request[12:16])
 
 	if transactionIdInRes != transactionIdInReq {
-		log.Warn("transaction ID mismatch ", transactionIdInReq, " ", transactionIdInRes)
-		return errors.New("transaction ID mismatch")
+		return fmt.Errorf("transaction id mismatch in announce response packet, got: %d want: %d", transactionIdInRes, transactionIdInReq)
 	}
 	actionInRes := binary.BigEndian.Uint32(response[0:4])
 	if actionInRes != uint32(ACTION_ANNOUNCE) {
-		log.Warn("action mismatch, retrying ", actionInRes, " ", ACTION_ANNOUNCE)
-		return errors.New("action mismatch")
+		return fmt.Errorf("action mismatch, got: %d want: %d", actionInRes, ACTION_ANNOUNCE)
 	}
 	return nil
 }
 
-func (c *UDPTrackerClient) announceResponsePacketToStruct(response []byte, numPeers int) UDPTrackerAnnounceResponse {
+func (c *UDPTrackerClient) announceResponsePacketToStruct(response []byte) UDPTrackerAnnounceResponse {
 	action := binary.BigEndian.Uint32(response[0:4])
 	transactionId := binary.BigEndian.Uint32(response[4:8])
 	interval := binary.BigEndian.Uint32(response[8:12])
 	leechers := binary.BigEndian.Uint32(response[12:16])
 	seeders := binary.BigEndian.Uint32(response[16:20])
-	peers := make([]PeerInfo, 0)
+	peers := make([]PeersInfo, 0)
+
+	numPeers := (len(response) - ANNOUNCE_RESPONSE_STATIC_SIZE) / 6
 	for i := 0; i < numPeers; i++ {
 		ip := net.IP(response[20+i*6 : 24+i*6])
-		peer := PeerInfo{
+		peer := PeersInfo{
 			Ip:   ip,
 			Port: binary.BigEndian.Uint16(response[24+i*6 : 26+i*6]),
 		}
@@ -218,71 +236,77 @@ func (c *UDPTrackerClient) announceResponsePacketToStruct(response []byte, numPe
 
 }
 
-func (c *UDPTrackerClient) Announce(announceData AnnounceData) (AnnounceResponse, error) {
-	log.Info("announcing to UDP tracker: ", c.host)
-	if c.connectionID == MAGIC_NUMBER {
-		c.connect()
+func (c *UDPTrackerClient) sendAnnounceRequest(ctx context.Context, announceData AnnounceData) ([]byte, error) {
+	conn, err := c.getConnection(ctx)
+	if err != nil {
+		return nil, err
 	}
-	log.Info("connection ID:", c.connectionID)
+	defer conn.Close()
+
+	deadline, ok := ctx.Deadline()
+	if ok {
+		conn.SetDeadline(deadline)
+	}
+
 	request := c.buildAnnounceRequestPacket(announceData)
-	tryNum := 0
+	_, err = conn.Write(request)
+	if err != nil {
+		return nil, err
+	}
 
-	for tryNum <= RETRIES_MAX {
-		log.Info("try number: ", tryNum)
-		readTimeout := time.Duration(math.Pow(2, float64(tryNum))*15) * time.Second
-		log.Info("read timeout: ", readTimeout)
+	response := c.buildAnnounceResponsePacket()
+	_, _, err = conn.ReadFromUDP(response)
+	if err != nil {
+		return nil, err
+	}
+	log.Debug("announce response: ", response)
+	err = c.verifyAnnounceResponsePacket(request, response)
+	if err != nil {
+		return nil, err
+	}
 
-		// increasing try number before we forget
-		tryNum++
+	peersCount := binary.BigEndian.Uint32(response[16:20]) + binary.BigEndian.Uint32(response[12:16])
+	log.Debug("peers count: ", peersCount)
+	return response[:ANNOUNCE_RESPONSE_STATIC_SIZE+int(peersCount)*6], nil
+}
 
-		conn, err := c.getConnection()
+func (c *UDPTrackerClient) Announce(ctx context.Context, announceData AnnounceData) (AnnounceResponse, error) {
+	if c.connectionID == MAGIC_NUMBER {
+		err := c.connect(ctx)
 		if err != nil {
-			log.WithError(err).Warn("failed to get UDP connection")
-			continue
-		}
-		defer conn.Close()
-		log.Debug("announce request: ", request)
-		_, err = conn.Write(request)
-		if err != nil {
-			log.WithError(err).Warn("failed to write to UDP tracker")
-			continue
-		}
-
-		err = conn.SetReadDeadline(time.Now().Add(readTimeout))
-		if err != nil {
-			log.WithError(err).Warn("failed to set read deadline")
-			continue
-		}
-
-		// Making a long response for getting all the peers
-		response := make([]byte, 1024*100)
-
-		numBytesInRes, _, err := conn.ReadFromUDP(response)
-		if err != nil {
-			log.WithError(err).Warn("failed to read from UDP tracker")
-			continue
-		} else if numBytesInRes < 20 {
-			log.WithError(err).Warn("announce response is too short")
-		} else {
-			// log.Info("announce response: ", response)
-			err := c.verifyAnnounceResponsePacket(request, response)
-			if err != nil {
-				log.WithError(err).Warn("announce response verification failed")
-				continue
-			}
-			numPeers := (numBytesInRes - 20) / 6
-			responseData := c.announceResponsePacketToStruct(response, numPeers)
-			log.Debug("announce response data: ", responseData)
-			return AnnounceResponse{
-				Interval: responseData.Interval,
-				Peers:    responseData.Peers,
-			}, nil
+			return AnnounceResponse{}, err
 		}
 	}
 
+	log.Info("announcing to UDP tracker: ", c.host)
+	numRetry := 0
+
+	for numRetry <= RETRIES_MAX {
+		timeout := time.Duration(math.Pow(2, float64(numRetry))) * TIMEOUT
+		log.Debug("try and timeout: ", numRetry, timeout)
+
+		announceContext, announceCancel := context.WithTimeout(ctx, timeout)
+		defer announceCancel()
+
+		numRetry++
+
+		response, err := c.sendAnnounceRequest(announceContext, announceData)
+		if err != nil {
+			log.WithError(err).Warn("failed to send announce request")
+			continue
+		}
+		announceResponse := c.announceResponsePacketToStruct(response)
+		return AnnounceResponse{
+			Interval: announceResponse.Interval,
+			Peers:    announceResponse.Peers,
+		}, nil
+	}
 	return AnnounceResponse{}, errors.New("failed to announce to UDP tracker")
 }
 
 func NewUDPTrackerClient(host string) TrackerClient {
-	return &UDPTrackerClient{host, MAGIC_NUMBER}
+	source := rand.NewSource(time.Now().UnixNano())
+
+	// Magic number denotes that we haven't connected yet
+	return &UDPTrackerClient{host, MAGIC_NUMBER, rand.New(source)}
 }

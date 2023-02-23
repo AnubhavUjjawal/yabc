@@ -23,6 +23,6 @@ type PeerClient interface {
 	Start(cxt context.Context, wg *sync.WaitGroup, infoHash string, peerId string, blockChannel chan meta.BlockRequest, blockResp chan meta.BlockResponse)
 }
 
-func NewPeerClient(peerInfo PeerInfo, torrentInfo meta.MetaInfo) PeerClient {
+func NewPeerClient(peerInfo PeersInfo, torrentInfo meta.MetaInfo) PeerClient {
 	return NewPeerClientV1(peerInfo, torrentInfo)
 }
