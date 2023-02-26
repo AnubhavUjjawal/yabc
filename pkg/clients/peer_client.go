@@ -2,7 +2,6 @@ package clients
 
 import (
 	"context"
-	"sync"
 
 	"github.com/AnubhavUjjawal/yabc/pkg/meta"
 )
@@ -19,10 +18,10 @@ type PeerState struct {
 // This will allow peers to know if the client will begin downloading when it is unchoked (and vice-versa).
 
 type PeerClient interface {
-	HandShake(cxt context.Context, wg *sync.WaitGroup, infoHash string, peerId string) error
-	Start(cxt context.Context, wg *sync.WaitGroup, infoHash string, peerId string, blockChannel chan meta.BlockRequest, blockResp chan meta.BlockResponse)
+	HandShake(cxt context.Context) error
+	// Start(cxt context.Context)
 }
 
-func NewPeerClient(peerInfo PeersInfo, torrentInfo meta.MetaInfo) PeerClient {
-	return NewPeerClientV1(peerInfo, torrentInfo)
+func NewPeerClient(peerId string, peerInfo PeersInfo, torrentInfo meta.MetaInfo) PeerClient {
+	return NewPeerClientV1(peerId, peerInfo, torrentInfo)
 }

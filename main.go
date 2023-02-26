@@ -39,6 +39,7 @@ func main() {
 	// 	cancel()
 	// }()
 	var wg sync.WaitGroup
+	go yabc.StartListener(ctx)
 	errs := yabc.RunTrackerClients(ctx, &wg)
 	if len(errs) > 0 {
 		log.Info(errs)

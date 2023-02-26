@@ -1,30 +1,33 @@
 package clients
 
 import (
-	"bufio"
 	"context"
+	"crypto/sha1"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
-	"sync"
 	"time"
 
+	"github.com/AnubhavUjjawal/yabc/pkg/bencoding"
 	"github.com/AnubhavUjjawal/yabc/pkg/meta"
 	log "github.com/sirupsen/logrus"
 )
 
 const (
-	PSTR           string = "BitTorrent protocol"
-	CHOKE          int8   = 0
-	UNCHOKE        int8   = 1
-	INTERESTED     int8   = 2
-	NOT_INTERESTED int8   = 3
-	HAVE           int8   = 4
-	BITFIELD       int8   = 5
-	REQUEST        int8   = 6
-	PIECE          int8   = 7
-	CANCEL         int8   = 8
+	PSTR                   string        = "BitTorrent protocol"
+	LEN_PSTR               int           = len(PSTR)
+	HANDSHAKE_REQUEST_SIZE int           = 49 + LEN_PSTR
+	PEER_CLIENT_TIMEOUT    time.Duration = 5 * time.Second
+	CHOKE                  int8          = 0
+	UNCHOKE                int8          = 1
+	INTERESTED             int8          = 2
+	NOT_INTERESTED         int8          = 3
+	HAVE                   int8          = 4
+	BITFIELD               int8          = 5
+	REQUEST                int8          = 6
+	PIECE                  int8          = 7
+	CANCEL                 int8          = 8
 )
 
 type PeerClientV1 struct {
@@ -37,6 +40,10 @@ type PeerClientV1 struct {
 
 	PeerChoking    bool
 	PeerInterested bool
+
+	PeerId string
+
+	bencoder bencoding.Bencoder
 }
 
 type PeerMessage struct {
@@ -47,113 +54,69 @@ type PeerMessage struct {
 	Rawdata []byte
 }
 
-func (c *PeerClientV1) buildHandshakeRequest(infoHash string, peerId string) []byte {
-	data := make([]byte, 49+len(PSTR))
-	copy(data, []byte{byte(len(PSTR))})
-	copy(data[1:20], PSTR)
-	copy(data[28:48], infoHash)
-	copy(data[48:68], peerId)
-	return data
-}
-
-func (c *PeerClientV1) HandShake(ctx context.Context, wg *sync.WaitGroup, infoHash string, peerId string) error {
-	log.Info("handshaking init with peer: ", c.peerInfo)
+func (c *PeerClientV1) getConnection(ctx context.Context) (net.Conn, error) {
 	dialer := &net.Dialer{}
 	conn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", c.peerInfo.Ip, c.peerInfo.Port))
 	if err != nil {
-		log.WithError(err).Error("failed to connect to peer", c.peerInfo)
-		return err
+		return nil, err
 	}
 
-	c.conn = &conn
+	return conn, nil
+}
 
-	request := c.buildHandshakeRequest(infoHash, peerId)
-	log.Info("sending handshake request: ", c.peerInfo)
+func (c *PeerClientV1) buildHandshakeRequestPacket() []byte {
+	data := make([]byte, HANDSHAKE_REQUEST_SIZE)
+	copy(data, []byte{byte(LEN_PSTR)})
+	copy(data[1:20], PSTR)
+	copy(data[28:48], []byte(c.getInfoHash()))
+	copy(data[48:68], []byte(c.PeerId))
+	return data
+}
 
-	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	deadline, ok := writeCtx.Deadline()
-	if ok {
-		conn.SetWriteDeadline(deadline)
-	}
-	_, err = conn.Write(request)
-	if err != nil {
-		log.WithError(err).Error("failed to send handshake request", c.peerInfo)
-		return err
-	}
-	log.Info("sent handshake request", c.peerInfo)
-	log.Info("waiting for handshake response", c.peerInfo)
+func (c *PeerClientV1) buildHandshakeResponsePacket() []byte {
+	data := make([]byte, HANDSHAKE_REQUEST_SIZE)
+	return data
+}
 
-	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	deadline, ok = readCtx.Deadline()
-	if ok {
-		conn.SetReadDeadline(deadline)
-	}
-	data := make([]byte, 1024)
-	n, err := conn.Read(data)
-	if err != nil {
-		if err == io.EOF {
-			log.Info("connection closed by peer")
-			return nil
-		}
-		log.WithError(err).Error("failed to read handshake response", c.peerInfo)
-		return err
-	}
-	if n > len(PSTR)+1 {
-		lenPstr := int(data[0])
-		pstr := string(data[1 : lenPstr+1])
-		// log.Println("pstr: ", pstr)
-		if pstr == PSTR {
-			log.Info("handshake received")
-		} else {
-			log.Info("pstr not equal to PSTR")
-			conn.Close()
-		}
-		// TODO: drop connection if info_hash or peer_id is not correct
+func (c *PeerClientV1) verifyHandshakeResponsePacket(request []byte, response []byte) error {
+	// TODO: drop connection if info_hash or peer_id is not correct
+
+	lenPstr := int(response[0])
+	pstr := string(response[1 : lenPstr+1])
+	if pstr != PSTR {
+		log.Error("pstr not equal to PSTR")
 	}
 	return nil
 }
 
-func (c *PeerClientV1) handleClient(conn net.Conn, blockRespChan chan meta.BlockResponse) {
-	log.Info("handling client: ", c.peerInfo)
-	r := bufio.NewReader(conn)
-	for {
-		data := make([]byte, 5)
-		_, err := r.Read(data)
-		if err != nil {
-			if err == io.EOF {
-				log.Info("connection closed by peer")
-				return
-			}
-			log.WithError(err).Error("failed to handle peer", c.peerInfo)
-			return
-		}
-		length := binary.BigEndian.Uint32(data[:4])
-		msgId := int8(data[4])
-		if length == 0 {
-			// log.Info("keep alive message", c.peerInfo)
-			continue
-		}
-		data = make([]byte, length-1)
-		n, err := io.ReadFull(conn, data)
-		if err != nil {
-			if err == io.EOF {
-				log.Info("connection closed by peer")
-				return
-			}
-			log.WithError(err).Error("failed to handle peer", c.peerInfo)
-			return
-		}
-		log.Println("no of bytes read: ", n)
-		peerMessage := PeerMessage{
-			Len:     int32(length),
-			Id:      msgId,
-			Rawdata: data,
-		}
-		// log.Info("received data: ", peerMessage, c.peerInfo)
-		c.handleMessage(peerMessage, blockRespChan)
+func (c *PeerClientV1) HandShake(ctx context.Context) error {
+	conn, err := c.getConnection(ctx)
+	if err != nil {
+		return err
 	}
+
+	request := c.buildHandshakeRequestPacket()
+	deadline, ok := ctx.Deadline()
+	if ok {
+		conn.SetDeadline(deadline)
+	}
+	_, err = conn.Write(request)
+	if err != nil {
+		return err
+	}
+
+	response := c.buildHandshakeResponsePacket()
+	_, err = io.ReadFull(conn, response)
+	if err != nil {
+		return err
+	}
+
+	err = c.verifyHandshakeResponsePacket(request, response)
+	if err != nil {
+		conn.Close()
+		return err
+	}
+	return nil
 }
 
 func (c *PeerClientV1) bits(bs []byte) []int {
@@ -199,82 +162,18 @@ func (c *PeerClientV1) handleMessage(msg PeerMessage, blockRespChan chan meta.Bl
 	}
 }
 
-func (c *PeerClientV1) buildRequestRequest(blockReq meta.BlockRequest) []byte {
-	data := make([]byte, 17)
-	// log.Println(uint32(REQUEST))
-	binary.BigEndian.PutUint32(data[:4], 13)
-	data[4] = byte(REQUEST)
-	binary.BigEndian.PutUint32(data[5:9], uint32(blockReq.Index))
-	binary.BigEndian.PutUint32(data[9:13], uint32(blockReq.Begin))
-	binary.BigEndian.PutUint32(data[13:17], uint32(blockReq.Length))
-	// log.Println(data)
-	return data
-}
-
-func (c *PeerClientV1) StartRequesting(ctx context.Context, wg *sync.WaitGroup, blockChan chan meta.BlockRequest) {
-	defer wg.Done()
-
-	for blockReq := range blockChan {
-		request := c.buildRequestRequest(blockReq)
-		log.Info("sending request for block: ", c.peerInfo, request, blockReq)
-		writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		deadline, ok := writeCtx.Deadline()
-
-		conn := *c.conn
-		if ok {
-			conn.SetWriteDeadline(deadline)
-		}
-		_, err := conn.Write(request)
-		if err != nil {
-			log.WithError(err).Error("failed to send request request", c.peerInfo)
-			return
-		}
-	}
-
-}
-
-func (c *PeerClientV1) SendInterested(ctx context.Context, wg *sync.WaitGroup) error {
-	data := make([]byte, 5)
-	binary.BigEndian.PutUint32(data[:4], 1)
-	data[4] = byte(INTERESTED)
-	log.Info("sending interested message: ", c.peerInfo, data)
-	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	deadline, ok := writeCtx.Deadline()
-
-	conn := *c.conn
-	if ok {
-		conn.SetWriteDeadline(deadline)
-	}
-	_, err := conn.Write(data)
+func (c *PeerClientV1) getInfoHash() string {
+	infoStr, err := c.bencoder.GetRawValueFromDict(c.torrentInfo.RawData, "info")
+	hasher := sha1.New()
+	hasher.Write([]byte(infoStr))
 	if err != nil {
-		log.WithError(err).Error("failed to send interested message", c.peerInfo)
-		return err
+		log.Fatal(err)
 	}
-
-	return nil
-
+	infoHash := hasher.Sum(nil)
+	return string(infoHash)
 }
 
-func (c *PeerClientV1) Start(ctx context.Context, wg *sync.WaitGroup, infoHash string, peerId string, blockChannel chan meta.BlockRequest, blockResp chan meta.BlockResponse) {
-	log.Info("starting peer client: ", c.peerInfo)
-	defer wg.Done()
-	err := c.HandShake(ctx, wg, infoHash, peerId)
-	if err != nil {
-		log.WithError(err).Error("failed to handshake with peer")
-		return
-	}
-	wg.Add(1)
-	// c.SendInterested(ctx, wg)
-	c.SendInterested(ctx, wg)
-	go c.StartRequesting(ctx, wg, blockChannel)
-	c.handleClient(*c.conn, blockResp)
-	wg.Wait()
-	// After handshake
-}
-
-func NewPeerClientV1(peerInfo PeersInfo, torrentInfo meta.MetaInfo) *PeerClientV1 {
+func NewPeerClientV1(peerId string, peerInfo PeersInfo, torrentInfo meta.MetaInfo) *PeerClientV1 {
 	return &PeerClientV1{
 		peerInfo:       peerInfo,
 		torrentInfo:    &torrentInfo,
@@ -282,5 +181,7 @@ func NewPeerClientV1(peerInfo PeersInfo, torrentInfo meta.MetaInfo) *PeerClientV
 		AmInterested:   false,
 		PeerChoking:    true,
 		PeerInterested: false,
+		PeerId:         peerId,
+		bencoder:       bencoding.NewBencoder(),
 	}
 }

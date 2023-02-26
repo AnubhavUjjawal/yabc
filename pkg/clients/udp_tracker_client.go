@@ -23,7 +23,7 @@ const (
 	ACTION_SCRAPE         = 2
 	ACTION_ERROR          = 3
 	RETRIES_MAX           = 8
-	TIMEOUT               = 15 * time.Second
+	UDP_TRACKER_TIMEOUT   = 15 * time.Second
 	CONNECT_REQUEST_SIZE  = 16
 	CONNECT_RESPONSE_SIZE = 16
 	ANNOUNCE_REQUEST_SIZE = 98
@@ -102,6 +102,7 @@ func (c *UDPTrackerClient) setConnectionIdFromConnectResponsePacket(response []b
 	c.connectionID = int64(binary.BigEndian.Uint64(response[8:16]))
 }
 
+// NOTE: `sendConnectRequest` and `sendAnnounceRequest` are very similar, we can refactor them
 func (c *UDPTrackerClient) sendConnectRequest(ctx context.Context) ([]byte, error) {
 	conn, err := c.getConnection(ctx)
 	if err != nil {
@@ -142,7 +143,7 @@ func (c *UDPTrackerClient) connect(ctx context.Context) error {
 			return ctx.Err()
 		}
 
-		timeout := time.Duration(math.Pow(2, float64(numRetry))) * TIMEOUT
+		timeout := time.Duration(math.Pow(2, float64(numRetry))) * UDP_TRACKER_TIMEOUT
 		log.Debug("try and timeout: ", numRetry, timeout)
 
 		connectContext, connectCancel := context.WithTimeout(ctx, timeout)
@@ -182,7 +183,7 @@ func (c *UDPTrackerClient) buildAnnounceRequestPacket(announceData AnnounceData)
 	binary.BigEndian.PutUint32(data[88:], 0)
 	numWant := DEFAULT_NUM_WANT
 	binary.BigEndian.PutUint32(data[92:], uint32(numWant))
-	binary.BigEndian.PutUint16(data[96:], 6767)
+	binary.BigEndian.PutUint16(data[96:], uint16(announceData.Port))
 	return data
 }
 
@@ -289,7 +290,7 @@ func (c *UDPTrackerClient) Announce(ctx context.Context, announceData AnnounceDa
 		if ctx.Err() != nil {
 			return AnnounceResponse{}, ctx.Err()
 		}
-		timeout := time.Duration(math.Pow(2, float64(numRetry))) * TIMEOUT
+		timeout := time.Duration(math.Pow(2, float64(numRetry))) * UDP_TRACKER_TIMEOUT
 		log.Debug("try and timeout: ", numRetry, timeout)
 
 		announceContext, announceCancel := context.WithTimeout(ctx, timeout)

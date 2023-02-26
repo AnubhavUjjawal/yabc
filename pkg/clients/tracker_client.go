@@ -13,6 +13,7 @@ type AnnounceData struct {
 	Downloaded int64
 	Left       int64
 	Uploaded   int64
+	Port       int16
 	// NumWant    int32
 }
 
