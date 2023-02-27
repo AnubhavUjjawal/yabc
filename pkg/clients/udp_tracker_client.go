@@ -304,7 +304,7 @@ func (c *UDPTrackerClient) Announce(ctx context.Context, announceData AnnounceDa
 			continue
 		}
 		announceResponse := c.announceResponsePacketToStruct(response)
-		log.Info("announce response: ", announceResponse)
+		// log.Info("announce response: ", announceResponse)
 		return AnnounceResponse{
 			Interval: announceResponse.Interval,
 			Peers:    announceResponse.Peers,

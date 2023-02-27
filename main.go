@@ -14,8 +14,8 @@ import (
 
 func main() {
 	// log.SetLevel(log.DebugLevel)
-	// torrentFile := "sample_torrents/sample1.torrent"
-	torrentFile := "sample_torrents/big-buck-bunny.torrent"
+	torrentFile := "sample_torrents/sample1.torrent"
+	// torrentFile := "sample_torrents/big-buck-bunny.torrent"
 	// torrentFile := "sample_torrents/cosmos-laundromat.torrent"
 	// read torrent file into string
 	dataBytes, err := os.ReadFile(torrentFile)
@@ -40,6 +40,7 @@ func main() {
 	// }()
 	var wg sync.WaitGroup
 	go yabc.StartListener(ctx)
+	go yabc.StartPeers(ctx)
 	errs := yabc.RunTrackerClients(ctx, &wg)
 	if len(errs) > 0 {
 		log.Info(errs)

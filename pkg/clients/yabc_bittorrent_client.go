@@ -10,7 +10,6 @@ import (
 
 	"github.com/AnubhavUjjawal/yabc/pkg/bencoding"
 	"github.com/AnubhavUjjawal/yabc/pkg/meta"
-	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -23,6 +22,10 @@ type YABCBittorentClient struct {
 	PeerId   string
 
 	listeningPort int16
+	// blockRequestChan  chan meta.BlockRequest
+	// blockResponseChan chan meta.BlockResponse
+
+	peersChan chan PeerClient
 }
 
 func (c *YABCBittorentClient) getInfoHash() string {
@@ -63,6 +66,7 @@ func (c *YABCBittorentClient) addPeers(peers []PeersInfo) {
 		}
 
 		c.peers[getPeerHash(peerInfo)] = peer
+		c.peersChan <- peer
 	}
 }
 
@@ -141,7 +145,62 @@ func (c *YABCBittorentClient) StartListener(ctx context.Context) {
 
 }
 
-func NewYABCBittorentClient(meta meta.MetaInfo) *YABCBittorentClient {
+func (c *YABCBittorentClient) ProcessBlockResponse(responseChan <-chan meta.BlockResponse) {
+	for response := range responseChan {
+		log.Info("received block response from peer", response)
+	}
+}
+
+// Only start new peers
+func (c *YABCBittorentClient) StartPeers(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(time.Second * 1)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				length := 1024 * 16
+				for _, peer := range c.peers {
+					go func(p PeerClient) {
+						// log.Info("sending request to peer", p)
+						requestChan := p.GetBlockRequestChan()
+						// request all the blocks in the first piece
+						// numBlocks := int(math.Ceil(float64(c.meta.Info.PieceLength) / float64(length)))
+						// for i := 0; i < numBlocks; i++ {
+						// 	requestChan <- meta.BlockRequest{
+						// 		Index:  0,
+						// 		Begin:  i * length,
+						// 		Length: length,
+						// 	}
+						// }
+						// log.Info("sending block request to channel", p)
+						requestChan <- meta.BlockRequest{
+							Index:  10,
+							Begin:  length,
+							Length: length,
+						}
+					}(peer)
+				}
+			case <-ctx.Done():
+				log.Info("context done, stopping peers")
+				return
+			}
+		}
+
+	}()
+	for peer := range c.peersChan {
+		go func(p PeerClient) {
+			p.Start(ctx)
+		}(peer)
+		go c.ProcessBlockResponse(peer.GetBlockResponseChan())
+	}
+}
+
+func (c *YABCBittorentClient) Interested(ctx context.Context) {
+
+}
+
+func NewYABCBittorentClient(metainfo meta.MetaInfo) *YABCBittorentClient {
 	trackers := []TrackerClient{}
 	// for _, trackerUrls := range meta.AnnounceList {
 	// 	for _, trackerUrl := range trackerUrls {
@@ -157,11 +216,17 @@ func NewYABCBittorentClient(meta meta.MetaInfo) *YABCBittorentClient {
 	trackers = append(trackers, newClient)
 
 	return &YABCBittorentClient{
-		meta:          meta,
-		PeerId:        uuid.New().String(),
+		meta: metainfo,
+		// PeerId:        uuid.New().String(),
+		PeerId:        "new-client-0001",
 		bencoder:      bencoding.NewBencoder(),
 		trackers:      trackers,
 		peers:         make(map[string]PeerClient),
 		listeningPort: 6881,
+
+		// todo: make size configurable to allow request pipelining
+		// blockRequestChan:  make(chan meta.BlockRequest),
+		// blockResponseChan: make(chan meta.BlockResponse),
+		peersChan: make(chan PeerClient),
 	}
 }
